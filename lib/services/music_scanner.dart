@@ -4,10 +4,10 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'package:metadata_god/metadata_god.dart';
+import 'package:file_picker/file_picker.dart';
 import '../models/song.dart';
 import 'song_database.dart';
 import 'cover_cache.dart';
-import 'metadata_parser.dart';
 import 'music_scanner_isolate.dart';
 
 class MusicScanner {
@@ -53,6 +53,11 @@ class MusicScanner {
         final status = await Permission.storage.request();
         return status.isGranted;
       }
+    }
+    
+    if (Platform.isIOS) {
+      // iOS：应用沙盒内不需要权限，直接返回 true
+      return true;
     }
     
     return false;
@@ -155,31 +160,29 @@ class MusicScanner {
       try {
         final metadata = await MetadataGod.readMetadata(file: file.path);
         
-        if (metadata != null) {
-          if (metadata.title != null && metadata.title!.isNotEmpty) {
-            title = metadata.title!;
-          }
-          
-          if (metadata.artist != null && metadata.artist!.isNotEmpty) {
-            artist = metadata.artist!;
-          }
-          
-          if (metadata.album != null && metadata.album!.isNotEmpty) {
-            album = metadata.album!;
-          }
-          
-          if (metadata.durationMs != null && metadata.durationMs! > 0) {
-            duration = (metadata.durationMs! / 1000).round();
-          }
-          
-          // 获取专辑封面
-          if (metadata.picture != null) {
-            final cachedCover = _coverCache.getCachedCover(file.path);
-            if (cachedCover != null) {
-              coverUrl = cachedCover;
-            } else {
-              coverUrl = await _saveCoverImage(metadata.picture!, file.path);
-            }
+        if (metadata.title != null && metadata.title!.isNotEmpty) {
+          title = metadata.title!;
+        }
+        
+        if (metadata.artist != null && metadata.artist!.isNotEmpty) {
+          artist = metadata.artist!;
+        }
+        
+        if (metadata.album != null && metadata.album!.isNotEmpty) {
+          album = metadata.album!;
+        }
+        
+        if (metadata.durationMs != null && metadata.durationMs! > 0) {
+          duration = (metadata.durationMs! / 1000).round();
+        }
+        
+        // 获取专辑封面
+        if (metadata.picture != null) {
+          final cachedCover = _coverCache.getCachedCover(file.path);
+          if (cachedCover != null) {
+            coverUrl = cachedCover;
+          } else {
+            coverUrl = await _saveCoverImage(metadata.picture!, file.path);
           }
         }
       } catch (e) {
@@ -223,6 +226,14 @@ class MusicScanner {
   Future<List<Directory>> _getMusicDirectories() async {
     final directories = <Directory>[];
     
+    if (Platform.isIOS) {
+      // iOS：只扫描应用 Documents 目录
+      final appDocDir = await getApplicationDocumentsDirectory();
+      directories.add(appDocDir);
+      return directories;
+    }
+    
+    // Android：保持原有逻辑
     try {
       // 获取外部存储目录
       final externalDir = await getExternalStorageDirectory();
@@ -249,5 +260,86 @@ class MusicScanner {
     }
     
     return directories;
+  }
+
+  // 导入音乐文件（主要用于 iOS）
+  Future<List<Song>> importMusicFiles() async {
+    try {
+      // 使用 file_picker 选择音乐文件
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.audio,
+        allowMultiple: true,
+        allowedExtensions: _supportedFormats.map((e) => e.substring(1)).toList(),
+      );
+
+      if (result == null || result.files.isEmpty) {
+        return [];
+      }
+
+      // 获取应用 Documents 目录
+      final appDocDir = await getApplicationDocumentsDirectory();
+      final musicDir = Directory(p.join(appDocDir.path, 'Music'));
+      if (!await musicDir.exists()) {
+        await musicDir.create(recursive: true);
+      }
+
+      // 复制文件到应用目录并解析元数据
+      final songs = <Song>[];
+      
+      for (final file in result.files) {
+        if (file.path == null) continue;
+        
+        final sourceFile = File(file.path!);
+        final fileName = file.name;
+        final destPath = p.join(musicDir.path, fileName);
+        
+        // 检查文件是否已存在
+        if (await File(destPath).exists()) {
+          debugPrint('File already exists: $fileName');
+          continue;
+        }
+        
+        // 复制文件到应用目录
+        await sourceFile.copy(destPath);
+        
+        // 解析元数据
+        final song = await _parseFileMetadata(File(destPath));
+        if (song != null) {
+          songs.add(song);
+        }
+      }
+      
+      // 保存到数据库
+      for (final song in songs) {
+        await _database.saveSong(song);
+      }
+      
+      return songs;
+    } catch (e) {
+      debugPrint('Import music error: $e');
+      return [];
+    }
+  }
+
+  // 删除音乐文件
+  Future<bool> deleteMusicFile(String songId) async {
+    try {
+      // 删除文件
+      final file = File(songId);
+      if (await file.exists()) {
+        await file.delete();
+      }
+      
+      // 删除封面缓存
+      await _coverCache.deleteCover(songId);
+      
+      // 从数据库删除
+      await _database.deleteSong(songId);
+      
+      return true;
+    } catch (e) {
+      debugPrint('Delete music file error: $e');
+      return false;
+    }
   }
 }

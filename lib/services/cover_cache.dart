@@ -72,6 +72,21 @@ class CoverCache {
     }
   }
 
+  // 删除指定封面缓存
+  Future<void> deleteCover(String sourcePath) async {
+    await init();
+    
+    try {
+      final cachePath = _getCachePath(sourcePath);
+      final cacheFile = File(cachePath);
+      if (cacheFile.existsSync()) {
+        await cacheFile.delete();
+      }
+    } catch (e) {
+      // 忽略删除失败
+    }
+  }
+
   // 清理过期缓存（可选）
   Future<void> clearCache({Duration? olderThan}) async {
     await init();

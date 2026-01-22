@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/song.dart';
@@ -55,7 +56,7 @@ class _SettingsPageState extends State<SettingsPage> {
   Future<void> _scanMusic() async {
     if (widget.scanner == null || widget.database == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('扫描功能不可用')),
+        const SnackBar(content: Text('功能不可用')),
       );
       return;
     }
@@ -65,40 +66,72 @@ class _SettingsPageState extends State<SettingsPage> {
     });
 
     try {
-      // 请求权限
-      final hasPermission = await widget.scanner!.requestPermissions();
-      if (!hasPermission) {
+      if (Platform.isIOS) {
+        // iOS：导入音乐文件
+        final importedSongs = await widget.scanner!.importMusicFiles();
+        
+        if (importedSongs.isEmpty) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('未选择任何文件')),
+            );
+          }
+          setState(() {
+            _isScanning = false;
+          });
+          return;
+        }
+        
+        // 保存到数据库
+        await widget.database!.saveSongs(importedSongs);
+        
+        // 通知主应用更新
+        if (widget.onSongsUpdated != null) {
+          widget.onSongsUpdated!(importedSongs);
+        }
+        
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('需要访问存储权限才能扫描音乐')),
+            SnackBar(content: Text('导入完成，添加了 ${importedSongs.length} 首歌曲')),
           );
         }
-        setState(() {
-          _isScanning = false;
-        });
-        return;
-      }
+      } else {
+        // Android：扫描音乐文件
+        // 请求权限
+        final hasPermission = await widget.scanner!.requestPermissions();
+        if (!hasPermission) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('需要访问存储权限才能扫描音乐')),
+            );
+          }
+          setState(() {
+            _isScanning = false;
+          });
+          return;
+        }
 
-      // 扫描音乐
-      final songs = await widget.scanner!.scanMusicFiles(forceFullScan: true);
+        // 扫描音乐
+        final songs = await widget.scanner!.scanMusicFiles(forceFullScan: true);
 
-      // 保存到数据库
-      await widget.database!.saveSongs(songs);
+        // 保存到数据库
+        await widget.database!.saveSongs(songs);
 
-      // 通知主应用更新
-      if (widget.onSongsUpdated != null) {
-        widget.onSongsUpdated!(songs);
-      }
+        // 通知主应用更新
+        if (widget.onSongsUpdated != null) {
+          widget.onSongsUpdated!(songs);
+        }
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('扫描完成，找到 ${songs.length} 首歌曲')),
-        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('扫描完成，找到 ${songs.length} 首歌曲')),
+          );
+        }
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('扫描失败: $e')),
+          SnackBar(content: Text('操作失败: $e')),
         );
       }
     } finally {
@@ -136,7 +169,9 @@ class _SettingsPageState extends State<SettingsPage> {
                   ),
                   _buildSectionHeader('乐库'),
                   _buildSettingItem(
-                    title: _isScanning ? '扫描中...' : '扫描',
+                    title: _isScanning 
+                        ? (Platform.isIOS ? '导入中...' : '扫描中...')
+                        : (Platform.isIOS ? '导入音乐' : '扫描'),
                     onTap: _isScanning ? null : () => _scanMusic(),
                   ),
                   _buildSwitchItem(
