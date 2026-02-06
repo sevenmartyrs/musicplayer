@@ -1,0 +1,48 @@
+name: Build Windows
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          flutter-version: '3.24.5'
+
+      - name: Verify Flutter installation
+        run: flutter doctor -v
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Build Windows executable
+        run: flutter build windows --release
+
+      - name: Upload Windows build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rmusic-windows-x64
+          path: build/windows/x64/runner/Release/
+          retention-days: 30
+
+      - name: Create ZIP archive
+        run: Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath rmusic-windows-x64.zip
+
+      - name: Upload ZIP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rmusic-windows-x64-zip
+          path: rmusic-windows-x64.zip
+          retention-days: 30
